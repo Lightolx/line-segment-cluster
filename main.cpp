@@ -4,6 +4,7 @@
 #include <vector>
 //#include <boost/filesystem.hpp>
 #include "eigen3/Eigen/Eigen"
+#include "clustering.h"
 
 // distance from a point to a line
 double frag2grag(std::pair<Eigen::Vector3d, Eigen::Vector3d> frag,
@@ -87,15 +88,28 @@ double frag2grag(std::pair<Eigen::Vector3d, Eigen::Vector3d> frag,
 
 }
 
+//double pt2frag(std::pair<Eigen::Vector3d, Eigen::Vector3d> frag,
+//               Eigen::Vector3d a)
+//{
+//    Eigen::Vector3d c = frag.first;
+//    Eigen::Vector3d d = frag.second;
+//    double dist1 = sqrt(pow(a[0]-c[0],2) + pow(a[2]-c[2],2));
+//    double dist2 = sqrt(pow(a[0]-d[0],2) + pow(a[2]-d[2],2));
+//    // todo:: add angle into account
+//    return dist1 < dist2 ? dist1 : dist2;
+//}
+
 double pt2frag(std::pair<Eigen::Vector3d, Eigen::Vector3d> frag,
-               Eigen::Vector3d a)
+               Eigen::Vector3d c)
 {
-    Eigen::Vector3d c = frag.first;
-    Eigen::Vector3d d = frag.second;
-    double dist1 = sqrt(pow(a[0]-c[0],2) + pow(a[2]-c[2],2));
-    double dist2 = sqrt(pow(a[0]-d[0],2) + pow(a[2]-d[2],2));
-    // todo:: add angle into account
-    return dist1 < dist2 ? dist1 : dist2;
+    Eigen::Vector3d a = frag.first;
+    Eigen::Vector3d b = frag.second;
+    Eigen::Vector3d ac = c-a;
+    Eigen::Vector3d ab = b-a;
+    Eigen::Vector3d Iab = ab/ab.norm();
+    return ac.cross(Iab).norm();
+//    Eigen::Vector3d n = ac.cross(ab);
+//    return sqrt(pow(n[0], 2) + pow(n[1], 2));
 }
 
 double pt2Group(std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> lines,
@@ -113,15 +127,135 @@ double pt2Group(std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> lines,
     return *(std::min_element(dist.begin(), dist.end()));
 }
 
+
+// judege the similarity between two line segments
+bool line2line(const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines1,
+                 const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines2,
+                 const double distTrd, const double angleTrd)
+{
+    Eigen::Vector2d a = Eigen::Vector2d(lines1.first[0], lines1.first[2]);
+    Eigen::Vector2d b = Eigen::Vector2d(lines1.second[0], lines1.second[2]);
+    Eigen::Vector2d c = Eigen::Vector2d(lines2.first[0], lines2.first[2]);
+    Eigen::Vector2d d = Eigen::Vector2d(lines2.second[0], lines2.second[2]);
+
+    double x1 = a[0];double y1 = a[1];
+    double x2 = b[0];double y2 = b[1];
+    double x3 = c[0];double y3 = c[1];
+    double x4 = d[0];double y4 = d[1];
+
+    double D = (y1-y2)*(x4-x3) - (y3-y4)*(x2-x1);
+    double D1 = (x2*y1 - x1*y2)*(x4-x3) - (x4*y3 - x3*y4)*(x2-x1);
+    double D2 = (y1-y2)*(x4*y3-x3*y4) - (y3-y4)*(x2*y1-x1*y2);
+    double crossX = D1/D;
+    double crossZ = D2/D;
+    Eigen::Vector2d p = Eigen::Vector2d(crossX, crossZ);
+
+    Eigen::Vector2d pa = a - p;
+    Eigen::Vector2d pb = b - p;
+    Eigen::Vector2d pc = c - p;
+    Eigen::Vector2d pd = d - p;
+
+    bool onAB = true;
+    bool onCD = true;
+
+    if (pa.dot(pb) > 0)
+    {
+        onAB = false;
+    }
+
+    if (pc.dot(pd) > 0)
+    {
+        onCD = false;
+    }
+
+    bool isCross = false;
+    double dist = 100;
+
+    if (onAB&&onCD)       // the two line segments do cross
+    {
+        isCross = true;
+        dist = 0;
+    }
+    else                 // the two line segments does not cross
+    {
+        // find the distance of a to cd, b to cd, c to ab and d to ab, return the smallest one
+        double distA = pt2frag(lines2, lines1.first);
+        double distB = pt2frag(lines2, lines1.second);
+        double distC = pt2frag(lines1, lines2.first);
+        double distD = pt2frag(lines1, lines2.second);
+        double minDist1 = distA < distB ? distA : distB;
+        double minDist2 = distC < distD ? distC : distD;
+        isCross = false;
+        dist = minDist1 < minDist2 ? minDist1 : minDist2;
+    }
+
+    double angle = 2;
+    Eigen::Vector2d ab = b-a;
+    Eigen::Vector2d cd = d-c;
+    angle = acos(fabs(ab.dot(cd))/(ab.norm()*cd.norm()));
+
+    if (dist < distTrd && angle < angleTrd)
+    {
+        return true;
+    }
+
+    return false;
+
+
+    /*
+    // note the foot point of c to ab be point e, foot point of d to ab be point f, find them
+    Eigen::Vector3d a = lines1.first;
+    Eigen::Vector3d b = lines1.second;
+    Eigen::Vector3d c = lines2.first;
+    Eigen::Vector3d d = lines2.second;
+    Eigen::Vector3d ab = b - a;
+    Eigen::Vector3d ac = c - a;
+    Eigen::Vector3d ad = d - a;
+    double lenab = ab.norm();               // length of vector ab
+    Eigen::Vector3d Iab = ab/lenab;         // Identity vector of vector ab
+    Eigen::Vector3d ae = ac.cross(Iab)*Iab;
+    Eigen::Vector3d af = ad.cross(Iab)*Iab;
+    Eigen::Vector3d e = a + ae;
+    Eigen::Vector3d f = a + af;
+
+    bool eOn = true;
+    bool fOn = true;
+    bool isCross = false;
+    double dist = 100;
+
+    if (ae.cross(ab) < 0)  // e is along the vector ab, not ba
+    {
+        eOn = false;
+    }
+
+    if ((f-b).cross(a-b) < 0)
+    {
+        fOn = false;
+    }
+
+    Eigen::Vector3d ec = c-e;
+    Eigen::Vector3d fd = d-f;
+    if (ec.cross(fd) > 0)          // c,d on the same side
+    {
+        isCross = false;
+        double lenec = ec.norm();
+        double lenfd = fd.norm();
+        dist = lenec < lenfd ? lenec : lenfd;
+    }
+
+    if (eOn&&fOn)
+    {
+
+    }
+    else if (eOn&&!fOn)
+    {
+
+    }
+    */
+}
+
 int main()
 {
-//    boost::filesystem::path lines_path("lines.txt");
-//    if(!boost::filesystem::exists(lines_path))
-//    {
-//        std::cerr << "no lines.txt exist" << std::endl;
-//        return -2;
-//    }
-
     std::ifstream fin("lines.txt");
     std::string ptline;
     double x, y, z;
@@ -151,10 +285,13 @@ int main()
     double dist2Trh = 3;
     int tmp = points.size();
 
+    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> lines;
+
     for (int i = 0; i < points.size(); i=i+2)
     {
         a = points[i];
         b = points[i+1];
+        lines.push_back(std::pair<Eigen::Vector3d, Eigen::Vector3d>(a,b));
         Eigen::Vector3d pt(-243.354000000000, 9.36483000000000, -271.059000000000);
         Eigen::Vector3d offset = pt-a;
 
@@ -273,15 +410,79 @@ int main()
 
     }
 
+    int num_lines = lines.size();
+    double distTrd = 1;
+    double angleTrd = 10;
+    std::vector<std::pair<int, int>> A;
+
+    for (int i = 0; i < num_lines; ++i)
+    {
+        std::pair<Eigen::Vector3d, Eigen::Vector3d> ab = lines[i];
+
+        for (int j = i+1; j < num_lines; ++j)
+        {
+            std::pair<Eigen::Vector3d, Eigen::Vector3d> cd = lines[j];
+            bool isConnect = line2line(ab, cd, distTrd, angleTrd);
+
+            if (isConnect)
+            {
+                A.push_back(std::pair<int, int>(i, j));
+                A.push_back(std::pair<int, int>(j, i));
+            }
+        }
+    }
+
+    cluGraph graph(A.size());
+
+    std::vector<std::pair<int, int>>::iterator iter = A.begin();
+    for (; iter != A.end(); iter++)
+    {
+        std::pair<int, int> edge = *iter;
+        int a = graph.findCluID(edge.first);
+        int b = graph.findCluID(edge.second);
+
+        if (a != b)
+        {
+            graph.join(a, b);
+        }
+    }
+
+    std::map<int, std::list<int> > cluster2lines;
+
+    for (int i = 0; i < num_lines; ++i)
+    {
+        int clusterID = graph.findCluID(i);
+
+        if (cluster2lines.find(clusterID) == cluster2lines.end())
+        {
+            cluster2lines[clusterID].push_back(i);
+        }
+    }
+
 
     std::ofstream fout("/media/psf/Home/Desktop/cluster.txt");
 
-    for (int i = 0; i < cate; i++)
+//    for (int i = 0; i < cate; i++)
+//    {
+//        for (int j = 0; j <  categories[i].size(); j++)
+//        {
+//            Eigen::Vector3d a = categories[i][j].first;
+//            Eigen::Vector3d b = categories[i][j].second;
+//            fout << a[0] << " " << a[1] << " " << a[2] << " " << i << std::endl;
+//            fout << b[0] << " " << b[1] << " " << b[2] << " " << i << std::endl;
+//        }
+//    }
+
+    std::map<int, std::list<int> >::iterator iter1 = cluster2lines.begin();
+    for (int i = 0; iter1 != cluster2lines.end(); iter1++, i++)
     {
-        for (int j = 0; j <  categories[i].size(); j++)
+        std::list<int> linesID = (*iter1).second;
+
+        std::list<int>::iterator iter2;
+        for (iter2 = linesID.begin(); iter2!= linesID.end(); iter2++)
         {
-            Eigen::Vector3d a = categories[i][j].first;
-            Eigen::Vector3d b = categories[i][j].second;
+            Eigen::Vector3d a = lines[*iter2].first;
+            Eigen::Vector3d b = lines[*iter2].second;
             fout << a[0] << " " << a[1] << " " << a[2] << " " << i << std::endl;
             fout << b[0] << " " << b[1] << " " << b[2] << " " << i << std::endl;
         }
