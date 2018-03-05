@@ -115,7 +115,7 @@ bool line2line(const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines1,
         dist = minDist1 < minDist2 ? minDist1 : minDist2;
     }
 
-    double angle = 2;
+    double angle = 0;
     Eigen::Vector2d ab = b-a;
     Eigen::Vector2d cd = d-c;
     angle = acos(fabs(ab.dot(cd))/(ab.norm()*cd.norm()));
@@ -415,12 +415,13 @@ int main()
         std::pair<Eigen::Vector3d, Eigen::Vector3d> line(points[i], points[i+1]);
         lines.push_back(line);
     }
+    // ***************read in lines************************//
 
-    // cluster all lines into different local cluster that represent the same frag
+    // Step1: local cluster, all lines into different local cluster that represent the same frag
     std::vector<std::list<int> > clusters = localCluster(lines);
 
+    // ***************output results************************//
     std::ofstream fout("/media/psf/Home/Desktop/cluster.txt");
-    int nn = 0;
     int i = 0;
     for (std::vector<std::list<int> >::iterator iter1 = clusters.begin(); iter1 != clusters.end(); iter1++, i++)
     {
@@ -433,60 +434,59 @@ int main()
             Eigen::Vector3d b = lines[*iter2].second;
             fout << a[0] << " " << a[1] << " " << a[2] << " " << i << std::endl;
             fout << b[0] << " " << b[1] << " " << b[2] << " " << i << std::endl;
-            nn++;
         }
     }
+    // ***************output results************************//
 
-
-    // for each cluster, represent it by a segment which is the union set of
-    // all lines in this cluster
-    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
-    clusterRef = mergeFrag(lines, clusters);
-
-
-    std::ofstream fout1("/media/psf/Home/Desktop/clusterRef.txt");
-
-    for (std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>::iterator
-         iter4 = clusterRef.begin(); iter4 != clusterRef.end(); iter4++)
-    {
-        Eigen::Vector3d a = (*iter4).first;
-        Eigen::Vector3d b = (*iter4).second;
-        fout1 << a[0] << " " << a[1] << " " << a[2] << std::endl;
-        fout1 << b[0] << " " << b[1] << " " << b[2] << std::endl;
-    }
-
-    int nnn = 0;
-    std::vector<std::list<int> >::iterator iter9 = clusters.begin();
-    for (; iter9 != clusters.end(); iter9++)
-    {
-        std::list<int> lineIDs = *iter9;
-        nnn += lineIDs.size();
-    }
-
-
-    // for all line group(cluster), section them by common lane
-    std::vector<std::list<int> > regionClusters = segCluster(clusters, clusterRef);
-
-    std::ofstream foutC("/media/psf/Home/Desktop/commons.txt");
-
-    int n = 0;
-    int j = 0;
-    for (std::vector<std::list<int> >::iterator iter = regionClusters.begin();
-         iter != regionClusters.end(); iter++, j++)
-    {
-        std::list<int> lineIDs = *iter;
-
-        for (std::list<int>::iterator iter2 = lineIDs.begin();
-             iter2!= lineIDs.end(); iter2++)
-        {
-                Eigen::Vector3d a = lines[*iter2].first;
-                Eigen::Vector3d b = lines[*iter2].second;
-                n++;
-                foutC << a[0] << " " << a[1] << " " << a[2] << " " << j << std::endl;
-                foutC << b[0] << " " << b[1] << " " << b[2] << " " << j << std::endl;
-        }
-    }
-
-    int aaa = 0;
+//    // for each cluster, represent it by a segment which is the union set of
+//    // all lines in this cluster
+//    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+//    clusterRef = mergeFrag(lines, clusters);
+//
+//
+//    std::ofstream fout1("/media/psf/Home/Desktop/clusterRef.txt");
+//
+//    for (std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>::iterator
+//         iter4 = clusterRef.begin(); iter4 != clusterRef.end(); iter4++)
+//    {
+//        Eigen::Vector3d a = (*iter4).first;
+//        Eigen::Vector3d b = (*iter4).second;
+//        fout1 << a[0] << " " << a[1] << " " << a[2] << std::endl;
+//        fout1 << b[0] << " " << b[1] << " " << b[2] << std::endl;
+//    }
+//
+//    int nnn = 0;
+//    std::vector<std::list<int> >::iterator iter9 = clusters.begin();
+//    for (; iter9 != clusters.end(); iter9++)
+//    {
+//        std::list<int> lineIDs = *iter9;
+//        nnn += lineIDs.size();
+//    }
+//
+//
+//    // for all line group(cluster), section them by common lane
+//    std::vector<std::list<int> > regionClusters = segCluster(clusters, clusterRef);
+//
+//    std::ofstream foutC("/media/psf/Home/Desktop/commons.txt");
+//
+//    int n = 0;
+//    int j = 0;
+//    for (std::vector<std::list<int> >::iterator iter = regionClusters.begin();
+//         iter != regionClusters.end(); iter++, j++)
+//    {
+//        std::list<int> lineIDs = *iter;
+//
+//        for (std::list<int>::iterator iter2 = lineIDs.begin();
+//             iter2!= lineIDs.end(); iter2++)
+//        {
+//                Eigen::Vector3d a = lines[*iter2].first;
+//                Eigen::Vector3d b = lines[*iter2].second;
+//                n++;
+//                foutC << a[0] << " " << a[1] << " " << a[2] << " " << j << std::endl;
+//                foutC << b[0] << " " << b[1] << " " << b[2] << " " << j << std::endl;
+//        }
+//    }
+//
+//    int aaa = 0;
 
 }
