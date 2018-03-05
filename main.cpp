@@ -31,10 +31,31 @@ double pt2frag(std::pair<Eigen::Vector3d, Eigen::Vector3d> frag,
 
 }
 
+bool ptOnFrag(std::pair<Eigen::Vector3d, Eigen::Vector3d> frag,
+             Eigen::Vector3d c)
+{
+    Eigen::Vector3d a = frag.first;
+    Eigen::Vector3d b = frag.second;
+    Eigen::Vector3d ab = b-a;
+    Eigen::Vector3d ac = c-a;
+    Eigen::Vector3d Iab = ab/ab.norm();    // identity vector of ab
+    Eigen::Vector3d ad = ac.dot(Iab)*Iab;
+    Eigen::Vector3d d = a+ad;
+    Eigen::Vector3d da = -ad;
+    Eigen::Vector3d db = b-d;
+
+    if (da.dot(db) < 0)
+    {
+        return true;
+    }
+
+    return false;
+}
+
 // judege the similarity between two line segments
 bool line2line(const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines1,
-                 const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines2,
-                 const double distTrd, const double angleTrd)
+               const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines2,
+               const double distTrd, const double angleTrd)
 {
     Eigen::Vector2d a = Eigen::Vector2d(lines1.first[0], lines1.first[2]);
     Eigen::Vector2d b = Eigen::Vector2d(lines1.second[0], lines1.second[2]);
@@ -77,6 +98,7 @@ bool line2line(const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines1,
     if (onAB&&onCD)       // the two line segments do cross
     {
         isCross = true;
+        return true;
         dist = 0;
     }
     else                 // the two line segments does not cross
@@ -106,6 +128,28 @@ bool line2line(const std::pair<Eigen::Vector3d, Eigen::Vector3d> lines1,
     return false;
 }
 
+// judge is the two line segments ab and cd have common region, regardless of
+// their horizontal offset
+bool frag2frag(const std::pair<Eigen::Vector3d, Eigen::Vector3d> ab,
+               const std::pair<Eigen::Vector3d, Eigen::Vector3d> cd)
+{
+    Eigen::Vector3d a = ab.first;
+    Eigen::Vector3d b = ab.second;
+    Eigen::Vector3d c = cd.first;
+    Eigen::Vector3d d = cd.second;
+    bool isOnA = ptOnFrag(cd, a);
+    bool isOnB = ptOnFrag(cd, b);
+    bool isOnC = ptOnFrag(ab, c);
+    bool isOnD = ptOnFrag(ab, d);
+
+    if (isOnA||isOnB||isOnC||isOnD)
+    {
+        return true;
+    }
+
+    return false;
+}
+
 // compute the distance of pt's projection on line who go through P and direction is dir
 double pt2G(const Eigen::Vector3d P, const Eigen::Vector3d dir,
             const Eigen::Vector3d a)
@@ -122,6 +166,230 @@ Eigen::Vector3d ptProj2Line(const Eigen::Vector3d P, const Eigen::Vector3d dir,
     Eigen::Vector3d pb = pa.dot(dir)*dir;
     Eigen::Vector3d b = P + pb;
     return b;
+}
+
+// local cluster frags to groups that all represent the same line segment
+std::vector<std::list<int> > localCluster(const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> lines,
+                                          double distTrd = 2, double angleTrd = 0.3)
+{
+    // get relation edge matrix A
+    int num_lines = lines.size();
+    std::vector<std::pair<int, int>> A;
+
+    for (int i = 0; i < num_lines; ++i)
+    {
+        std::pair<Eigen::Vector3d, Eigen::Vector3d> ab = lines[i];
+
+        for (int j = i+1; j < num_lines; ++j)
+        {
+            std::pair<Eigen::Vector3d, Eigen::Vector3d> cd = lines[j];
+            bool isConnect = line2line(ab, cd, distTrd, angleTrd);
+
+            if (isConnect)
+            {
+                A.push_back(std::pair<int, int>(i, j));
+                A.push_back(std::pair<int, int>(j, i));
+            }
+        }
+    }
+
+    // return a conjoint graph
+    cluGraph graph(num_lines);
+
+    std::vector<std::pair<int, int>>::iterator iter = A.begin();
+    for (; iter != A.end(); iter++)
+    {
+        std::pair<int, int> edge = *iter;
+        int a = graph.findCluID(edge.first);
+        int b = graph.findCluID(edge.second);
+
+        if (a != b)
+        {
+            graph.join(a, b);
+        }
+    }
+
+    // outout the conjoint graph
+    std::map<int, std::list<int> > cluster2lines;
+
+    for (int i = 0; i < num_lines; ++i)
+    {
+        int clusterID = graph.findCluID(i);
+        cluster2lines[clusterID].push_back(i);
+    }
+
+    std::vector<std::list<int> > clusters;
+    clusters.reserve(cluster2lines.size());
+
+    for (std::map<int, std::list<int> >::iterator iter = cluster2lines.begin();
+         iter != cluster2lines.end(); iter++)
+    {
+        clusters.push_back((*iter).second);
+    }
+
+    return clusters;
+};
+
+// use a frag to represent all frags that represent the same lien segment
+// get from local cluster
+std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> mergeFrag(
+        const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> lines,
+        const std::vector<std::list<int> > clusters)
+{
+    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> clusterRef;
+    clusterRef.reserve(clusters.size());
+
+    for (std::vector<std::list<int> >::const_iterator iter = clusters.begin();
+         iter != clusters.end(); iter++)
+    {
+        std::list<int> linesIDs = *iter;
+        Eigen::Vector3d P(0,0,0);
+        Eigen::Vector3d direction(0,0,0);
+        int n = 2*linesIDs.size();
+        Eigen::MatrixXd points(3,n);
+        std::vector<Eigen::Vector3d> pts;
+        pts.reserve(n);
+
+        int i = 0;
+        for (std::list<int>::iterator iter2 = linesIDs.begin();
+             iter2!= linesIDs.end(); iter2++, i+=2)
+        {
+            Eigen::Vector3d a = lines[*iter2].first;
+            Eigen::Vector3d b = lines[*iter2].second;
+            P += a;
+            P += b;
+            direction += b - a;
+            points(0,i) = a[0];
+            points(1,i) = a[1];
+            points(2,i) = a[2];
+            points(0,i+1) = b[0];
+            points(1,i+1) = b[1];
+            points(2,i+1) = b[2];
+            pts.push_back(a);
+            pts.push_back(b);
+        }
+
+        // gravity point
+        P /= double(n);
+
+        // use SVD to find direction
+        Eigen::MatrixXd I = Eigen::MatrixXd::Identity(n,n) -
+                            1.0/double(n)*Eigen::MatrixXd::Constant(n,n,1.0);
+        Eigen::MatrixXd Scat = points*I*points.transpose();
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(Scat, Eigen::ComputeThinU);
+
+        Eigen::MatrixXd U;
+        Eigen::VectorXd S;
+        U = svd.matrixU();
+        S = svd.singularValues();
+        int maxSValuePos;
+        S.maxCoeff(&maxSValuePos);
+
+//        Eigen::Vector3d dir = Eigen::Vector3d(U(0,maxSValuePos),
+//                                              U(1,maxSValuePos), U(2,maxSValuePos));
+        Eigen::Vector3d dir = direction;
+        dir.normalize();
+
+        // for all two end point of a line segment, project it to dir and find two end
+        // of all of them
+        std::vector<double> dists;
+        dists.reserve(n);
+        for (std::vector<Eigen::Vector3d>::iterator iter2 = pts.begin();
+             iter2 != pts.end(); iter2++)
+        {
+            double dis = pt2G(P, dir, *iter2);
+            dists.push_back(dis);
+        }
+
+        std::vector<double>::iterator iterMin = std::min_element(dists.begin(),
+                                                                 dists.end());
+        std::vector<double>::iterator iterMax = std::max_element(dists.begin(),
+                                                                 dists.end());
+        int minIdx = std::distance(dists.begin(), iterMin);
+        int maxIdx = std::distance(dists.begin(), iterMax);
+
+        Eigen::Vector3d a = ptProj2Line(P, dir, pts[minIdx]);
+        Eigen::Vector3d b = ptProj2Line(P, dir, pts[maxIdx]);
+
+        clusterRef.push_back(std::pair<Eigen::Vector3d, Eigen::Vector3d>(a, b));
+    }
+
+    return clusterRef;
+};
+
+std::vector<std::list<int> > segCluster(std::vector<std::list<int> > clusters,
+      const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> clusterRef)
+{
+    if (clusterRef.size() != clusters.size())
+    {
+        std::cout << "merge frag is wrong, number of clusters dismatch!";
+        abort();
+    }
+
+    int numCluster = clusterRef.size();
+    std::vector<std::pair<int, int> > A;
+
+    for (int i = 0; i < numCluster; i++)
+    {
+        std::pair<Eigen::Vector3d, Eigen::Vector3d> ab = clusterRef[i];
+
+        for (int j = i+1; j < numCluster; ++j)
+        {
+            std::pair<Eigen::Vector3d, Eigen::Vector3d> cd = clusterRef[j];
+            bool isCommon = frag2frag(ab, cd);
+
+            if (isCommon)
+            {
+                A.push_back(std::pair<int, int>(i, j));
+                A.push_back(std::pair<int, int>(j, i));
+            }
+        }
+    }
+
+    // return a conjoint graph
+    cluGraph graph(numCluster);
+
+    std::vector<std::pair<int, int>>::iterator iter = A.begin();
+    for (; iter != A.end(); iter++)
+    {
+        std::pair<int, int> edge = *iter;
+        int a = graph.findCluID(edge.first);
+        int b = graph.findCluID(edge.second);
+
+        if (a != b)
+        {
+            graph.join(a, b);
+        }
+    }
+
+    // outout the conjoint graph
+    std::map<int, std::list<int> > mRegionCluster;
+
+    for (int i = 0; i < numCluster; ++i)
+    {
+        int regionID = graph.findCluID(i);
+        mRegionCluster[regionID].push_back(i);
+    }
+
+    std::vector<std::list<int> > regionClusters;
+    regionClusters.resize(mRegionCluster.size());
+
+    int i = 0;
+    for (std::map<int, std::list<int> >::iterator iter = mRegionCluster.begin();
+         iter != mRegionCluster.end(); iter++, i++)
+    {
+        std::list<int> clusterIDs = iter->second;
+
+        for (std::list<int>::iterator iter2 = clusterIDs.begin();
+             iter2 != clusterIDs.end(); iter2++)
+        {
+//            regionClusters[i].insert(regionClusters[i].end(), clusters[*iter2]);
+            regionClusters[i].insert(regionClusters[i].end(),
+                                     clusters[*iter2].begin(), clusters[*iter2].end());
+        }
+    }
+
+    return regionClusters;
 }
 
 int main()
@@ -148,65 +416,15 @@ int main()
         lines.push_back(line);
     }
 
-    // get relation edge matrix A
-    int num_lines = lines.size();
-    double distTrd = 2;
-    double angleTrd = 10;
-    std::vector<std::pair<int, int>> A;
+    // cluster all lines into different local cluster that represent the same frag
+    std::vector<std::list<int> > clusters = localCluster(lines);
 
-    for (int i = 0; i < num_lines; ++i)
-    {
-        std::pair<Eigen::Vector3d, Eigen::Vector3d> ab = lines[i];
-
-        for (int j = i+1; j < num_lines; ++j)
-        {
-            std::pair<Eigen::Vector3d, Eigen::Vector3d> cd = lines[j];
-            bool isConnect = line2line(ab, cd, distTrd, angleTrd);
-
-            if (isConnect)
-            {
-                A.push_back(std::pair<int, int>(i, j));
-                A.push_back(std::pair<int, int>(j, i));
-            }
-        }
-    }
-
-    int tmp = A.size();
-    int n = 0;
-
-    // return a conjoint graph
-    cluGraph graph(num_lines);
-
-    std::vector<std::pair<int, int>>::iterator iter = A.begin();
-    for (; iter != A.end(); iter++)
-    {
-        std::pair<int, int> edge = *iter;
-        int a = graph.findCluID(edge.first);
-        int b = graph.findCluID(edge.second);
-
-        if (a != b)
-        {
-            graph.join(a, b);
-            n++;
-        }
-    }
-
-    // outout the conjoint graph
-    std::map<int, std::list<int> > cluster2lines;
-
-    for (int i = 0; i < num_lines; ++i)
-    {
-        int clusterID = graph.findCluID(i);
-        cluster2lines[clusterID].push_back(i);
-    }
-
-    /*
     std::ofstream fout("/media/psf/Home/Desktop/cluster.txt");
-
-    std::map<int, std::list<int> >::iterator iter1 = cluster2lines.begin();
-    for (int i = 0; iter1 != cluster2lines.end(); iter1++, i++)
+    int nn = 0;
+    int i = 0;
+    for (std::vector<std::list<int> >::iterator iter1 = clusters.begin(); iter1 != clusters.end(); iter1++, i++)
     {
-        std::list<int> linesID = (*iter1).second;
+        std::list<int> linesID = *iter1;
 
         std::list<int>::iterator iter2;
         for (iter2 = linesID.begin(); iter2!= linesID.end(); iter2++)
@@ -215,96 +433,60 @@ int main()
             Eigen::Vector3d b = lines[*iter2].second;
             fout << a[0] << " " << a[1] << " " << a[2] << " " << i << std::endl;
             fout << b[0] << " " << b[1] << " " << b[2] << " " << i << std::endl;
+            nn++;
         }
     }
-     */
+
 
     // for each cluster, represent it by a segment which is the union set of
     // all lines in this cluster
-    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> clusterRef;
-    clusterRef.reserve(cluster2lines.size());
-    std::map<int, std::list<int> >::iterator iter1 = cluster2lines.begin();
-    for (int i = 0; iter1 != cluster2lines.end(); iter1++, i++)
-    {
-        std::list<int> linesID = (*iter1).second;
-        Eigen::Vector3d P(0,0,0);
-        int n = 2*linesID.size();
-        Eigen::MatrixXd points(3,n);
-        std::vector<Eigen::Vector3d> pts;
-        pts.reserve(n);
-        std::list<int>::iterator iter2 = linesID.begin();
+    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+    clusterRef = mergeFrag(lines, clusters);
 
-        for (int i = 0; iter2!= linesID.end(); iter2++, i+=2)
-        {
-            Eigen::Vector3d a = lines[*iter2].first;
-            Eigen::Vector3d b = lines[*iter2].second;
-            P += a;
-            P += b;
-            points(0,i) = a[0];
-            points(1,i) = a[1];
-            points(2,i) = a[2];
-            points(0,i+1) = b[0];
-            points(1,i+1) = b[1];
-            points(2,i+1) = b[2];
-            pts.push_back(a);
-            pts.push_back(b);
-        }
 
-        // gravity point
-        P /= double(n);
+    std::ofstream fout1("/media/psf/Home/Desktop/clusterRef.txt");
 
-        // use SVD to find direction
-        Eigen::MatrixXd I = Eigen::MatrixXd::Identity(n,n) -
-                          1.0/double(n)*Eigen::MatrixXd::Constant(n,n,1.0);
-        Eigen::MatrixXd Scat = points*I*points.transpose();
-        Eigen::JacobiSVD<Eigen::MatrixXd> svd(Scat, Eigen::ComputeThinU);
-
-        Eigen::MatrixXd U;
-        Eigen::VectorXd S;
-        U = svd.matrixU();
-        S = svd.singularValues();
-        int maxSValuePos;
-        S.maxCoeff(&maxSValuePos);
-
-        Eigen::Vector3d dir = Eigen::Vector3d(U(0,maxSValuePos),
-                                              U(1,maxSValuePos), U(2,maxSValuePos));
-        dir.normalize();
-
-        // for all two end point of a line segment, project it to dir and find two end
-        // of all of them
-        std::vector<double> dists;
-        dists.reserve(n);
-        std::vector<Eigen::Vector3d>::iterator iter3 = pts.begin();
-        for (; iter3 != pts.end(); iter3++)
-        {
-            double dis = pt2G(P, dir, *iter3);
-            dists.push_back(dis);
-        }
-
-        std::vector<double>::iterator iterMin = std::min_element(dists.begin(),
-                                                                 dists.end());
-        std::vector<double>::iterator iterMax = std::max_element(dists.begin(),
-                                                                 dists.end());
-        int minIdx = std::distance(dists.begin(), iterMin);
-        int maxIdx = std::distance(dists.begin(), iterMax);
-
-        Eigen::Vector3d a = ptProj2Line(P, dir, pts[minIdx]);
-        Eigen::Vector3d b = ptProj2Line(P, dir, pts[maxIdx]);
-
-        clusterRef.push_back(std::pair<Eigen::Vector3d, Eigen::Vector3d>(a, b));
-    }
-
-    std::ofstream fout("/media/psf/Home/Desktop/clusterRef.txt");
-
-    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>::iterator
-            iter4 = clusterRef.begin();
-
-    for (; iter4 != clusterRef.end(); iter4++)
+    for (std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>::iterator
+         iter4 = clusterRef.begin(); iter4 != clusterRef.end(); iter4++)
     {
         Eigen::Vector3d a = (*iter4).first;
         Eigen::Vector3d b = (*iter4).second;
-        fout << a[0] << " " << a[1] << " " << a[2] << std::endl;
-        fout << b[0] << " " << b[1] << " " << b[2] << std::endl;
+        fout1 << a[0] << " " << a[1] << " " << a[2] << std::endl;
+        fout1 << b[0] << " " << b[1] << " " << b[2] << std::endl;
     }
+
+    int nnn = 0;
+    std::vector<std::list<int> >::iterator iter9 = clusters.begin();
+    for (; iter9 != clusters.end(); iter9++)
+    {
+        std::list<int> lineIDs = *iter9;
+        nnn += lineIDs.size();
+    }
+
+
+    // for all line group(cluster), section them by common lane
+    std::vector<std::list<int> > regionClusters = segCluster(clusters, clusterRef);
+
+    std::ofstream foutC("/media/psf/Home/Desktop/commons.txt");
+
+    int n = 0;
+    int j = 0;
+    for (std::vector<std::list<int> >::iterator iter = regionClusters.begin();
+         iter != regionClusters.end(); iter++, j++)
+    {
+        std::list<int> lineIDs = *iter;
+
+        for (std::list<int>::iterator iter2 = lineIDs.begin();
+             iter2!= lineIDs.end(); iter2++)
+        {
+                Eigen::Vector3d a = lines[*iter2].first;
+                Eigen::Vector3d b = lines[*iter2].second;
+                n++;
+                foutC << a[0] << " " << a[1] << " " << a[2] << " " << j << std::endl;
+                foutC << b[0] << " " << b[1] << " " << b[2] << " " << j << std::endl;
+        }
+    }
+
+    int aaa = 0;
 
 }
